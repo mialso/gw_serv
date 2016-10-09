@@ -2,6 +2,8 @@
 #include <malloc.h>
 #include <string.h>
 #include <stdio.h>
+#include <ctype.h>
+#include <stdlib.h>
 
 #include "f_store.h"
 
@@ -24,42 +26,28 @@ enum Roles {
 struct F_store fs_store;
 kv_t users;
 
-static int validate_key_fail(char *string, char *key);
 static int add_admin(kv_t *kv_store, struct F_store *fs_store);
 static int add_fsitem_to_kv(kv_t *kv_store, struct F_item *fs_item);
 static int init_kv_store(struct F_store *fs_store, kv_t *kv_store);
 static int print_each(const kv_item *item, const void *string);
-//static int user_to_string(char *res_string, struct F_item *user);
 static void user_to_buf(xbuf_t *buf, struct F_item *user);
 static int get_user_from_req(char *data, u64 data_len, struct F_item *user);
 
-int main(int args, char *argv[])
+int main(int argc, char *argv[])
 {
 		char str[MAX_REPLY] = {0};
+		char *tmp_str = NULL;
 		char store_path[1024] = {0};
-		char *req_data = (char *) get_env(argv, REQ_ENTITY);
-		u64 content_len = (u64) get_env(argv, CONTENT_LENGTH);
 		xbuf_t *reply = get_reply(argv);
+
+		u64 method = (u64) get_env(argv, REQUEST_METHOD);
 
 		struct F_item req_user = {0};
 		struct F_item *cur_user = NULL;
 
-		if (MAX_REQ_DATA < content_len) {
-			xbuf_cat(reply, "[ERROR]: too long data, max len is 63");
-			return HTTP_200_OK;
-		}
-		if (0 == content_len) {
-			kv_do(&users, NULL, 0, print_each, (void*)reply);
-			//xbuf_cat(reply, str);
-			s_snprintf(str, sizeof(str)-1, "req_data =%s", "content len was 0");
-			log_err(argv, str);
-			return HTTP_200_OK;
-		}
-		s_snprintf(str, sizeof(str)-1, "[INFO]: req_data =%s, content_len =%d", req_data, content_len);
-		log_err(argv, str);
 		if ('\0' == users.name[0]) {
-				// init f_store
-				//strcpy(store_path, (char *)get_env(argv, VHOST_ROOT);
+				// init f_storee
+				printf("store initialized\n");
 				s_snprintf(store_path, sizeof(store_path)-1, "%s/%s",
 					   	(char *)get_env(argv, VHOST_ROOT),
 						STORE_PATH
@@ -86,44 +74,151 @@ int main(int args, char *argv[])
 					}
 				}
 		}
-		if (get_user_from_req(req_data, content_len, &req_user)) {
-				xbuf_cat(reply, "wrd");
-				log_err(argv, "unable to get user name from request");
-				return HTTP_200_OK;
-		}
-		cur_user = (struct F_item *) kv_get(&users, req_user.name, strlen(req_user.name));
-		if (!cur_user) {
-				xbuf_cat(reply, "epic_fail");
-				log_err(argv, "no user found in users store");
-				return HTTP_200_OK;
-		}
-		if ((validate_key_fail(cur_user->key, req_user.key))) {
-				xbuf_cat(reply, "epic_fail");
-				log_err(argv, "password fail");
-				return HTTP_200_OK;
-		}
-		//user_to_string(str, cur_user);
-		user_to_buf(reply, cur_user);
-		//xbuf_cat(reply, str);
 
-		return HTTP_200_OK;
+		// TODO refactor to switch
+		if (1 == method) 
+		{
+			// serve GET request
+			get_arg("name=", &tmp_str, argc, argv);
+			if (NULL == tmp_str || ('\0' == *(tmp_str))) {
+				// no user name provided
+				xbuf_cat(reply, "1:[ERROR]: no user name provided");
+				return HTTP_200_OK;
+			} else if (31 < strlen(tmp_str)) {
+				// user name is tooooo long
+				xbuf_cat(reply, "2:[ERROR]: user name is too long");
+				return HTTP_200_OK;
+			}
+			if (!strcmp(tmp_str, "all")) {
+				// reply all users
+				printf("D0\n");
+				kv_do(&users, NULL, 0, print_each, (void*)reply);
+				return HTTP_200_OK;
+			}
+			strncpy(req_user.name, tmp_str, NAME_SIZE);
+			tmp_str = NULL;
+			get_arg("key=", &tmp_str, argc, argv);
+			if (NULL == tmp_str || ('\0' == *(tmp_str))) {
+				xbuf_cat(reply, "3:[ERROR]: no key provided");
+				return HTTP_200_OK;
+			} else if (31 < strlen(tmp_str)) {
+				xbuf_cat(reply, "4:[ERROR]: key is too long");
+				return HTTP_200_OK;
+			}
+			cur_user = (struct F_item *) kv_get(&users, req_user.name, strlen(req_user.name));
+			if (!cur_user) {
+				xbuf_cat(reply, "5:[ERROR]: no such user in store");
+				return HTTP_200_OK;
+			}
+			if (strcmp(cur_user->key, tmp_str)) {
+				xbuf_cat(reply, "6:[ERROR]: user key is not equal to stored one");
+				return HTTP_200_OK;
+			}
+			user_to_buf(reply, cur_user);
+			return HTTP_200_OK;
+
+		}
+	   	else if (4 == method || 3 == method)
+	   	{
+			// server POST & PUT request
+			char *req_data = (char *) get_env(argv, REQ_ENTITY);
+			u64 content_len = (u64) get_env(argv, CONTENT_LENGTH);
+			u64 res = 0;
+			if (MAX_REQ_DATA < content_len) {
+				xbuf_cat(reply, "7:[ERROR]: too long data, max len is 63");
+				return HTTP_200_OK;
+			}
+			if ((res = get_user_from_req(req_data, content_len, &req_user))) {
+				xbuf_xcat(reply, "8:[ERROR]: user data is no valid: [%d]", res);
+				return HTTP_200_OK;
+			}
+			cur_user = (struct F_item *) kv_get(&users, req_user.name, strlen(req_user.name));
+			if (cur_user) {
+				// TODO implement update user
+				// update user
+				strncpy(cur_user->key, req_user.key, KEY_SIZE-1);
+				cur_user->role = req_user.role;
+				cur_user->id = req_user.id;
+				user_to_buf(reply, cur_user);
+				return HTTP_200_OK;
+			} else {
+				// TODO implement add user
+				// add new user
+				u64 fs_id = 0;
+				if (!req_user.id) {
+					req_user.id = getms();
+				}
+				fs_id = add_instance(&fs_store, &req_user);
+				if (!fs_id) {
+					xbuf_cat(reply, "9:[ERROR]: add_instance fail");
+					return HTTP_200_OK;
+				}
+				cur_user = get_item(&fs_store, fs_id);
+				if(0 != add_fsitem_to_kv(&users, cur_user)) {
+					xbuf_cat(reply, "a:[ERROR]: add_fsitem_to kv fail");
+					return HTTP_200_OK;
+				}
+				user_to_buf(reply, cur_user);
+				return HTTP_200_OK;
+			}
+		}
+	   	else
+	   	{
+			// no other requests are served
+			xbuf_xcat(reply, "f:[ERROR]: such type(method=%d) of HTTP request is not served", method);
+			return HTTP_200_OK;
+		}
 }
-//int user_to_string(xbuf_t *buf, struct F_item *user)
 void user_to_buf(xbuf_t *buf, struct F_item *user)
 {
-	//return s_snprintf(res_string, USER_STRING_MAX_LEN, "%d:%s:%s:%d|",
-	xbuf_xcat(buf, "|%d:%s:%s:%d",
+	printf("D1\n");
+	xbuf_xcat(buf, "|%lu:%s:%s:%d",
 						user->id,
 						user->name,
 						user->key,
 						user->role
 	);
+	printf("L1\n");
 }
 int get_user_from_req(char *data, u64 data_len, struct F_item *user)
 {
 	u64 counter = 0;
 	u64 key_counter = 0;
-	char cur_char;
+	u64 role = 0;
+	u64 offset = 0;
+	char cur_char = *(data+counter);
+	while ((',' != cur_char) && (counter < data_len)) {
+		if ((NAME_SIZE-1) <= counter) {
+			return 1;
+		}
+		*(user->name+counter) = cur_char;
+		++counter;
+		cur_char = *(data+counter);
+	}
+	++counter;
+	offset = counter;
+	cur_char = *(data+counter);
+	while((',' != cur_char) && (counter < data_len)) {
+		key_counter = counter-offset;
+		if ((KEY_SIZE-1) <= key_counter) {
+			return 2;
+		}
+		*(user->key+key_counter) = cur_char;
+		++counter;
+		cur_char = *(data+counter);
+	}
+	++counter;
+	if (counter >= data_len) {
+		return 3;
+	}
+	if (!(role = strtoll(data+counter, NULL, 10))) {
+		// TODO extract more information from errno
+		return 4;
+	}
+	user->role = role;
+	return 0;
+
+	/*
 	while(counter < data_len) {
 		cur_char = *(data+counter);
 		if ((',' != cur_char) && (!key_counter)) {
@@ -147,12 +242,9 @@ int get_user_from_req(char *data, u64 data_len, struct F_item *user)
 		*(user->key+(counter-key_counter)) = cur_char;
 		++counter;
 	}
+	*/
 	return 0;
 }	
-int validate_key_fail(char *string, char *key)
-{
-	return 0;
-}
 int init_kv_store(struct F_store *fs_store, kv_t *kv_store)
 {
 	struct F_item *fs_item;
@@ -177,10 +269,12 @@ int add_fsitem_to_kv(kv_t *kv_store, struct F_item *fs_item)
 	kvitem.klen = strlen(fs_item->name);
 	kvitem.val = (char *) fs_item;
 	kvitem.in_use = 0;
-	if(!kv_add(kv_store, &kvitem)) {
+	kv_item *new_item = NULL;
+	if(NULL == (new_item = kv_add(kv_store, &kvitem))) {
 		fprintf(stderr, "[ERROR]: kv_add(): out_of_memory\n");
 		return 1;
 	}
+	printf("item {%s, %d: %p} added to kv[%ld at %p]\n", fs_item->name, kvitem.klen, fs_item, kv_store->nbr_items, new_item);
 	return 0;
 }
 int add_admin(kv_t *kv_store, struct F_store *fs_store)
@@ -212,16 +306,13 @@ int add_admin(kv_t *kv_store, struct F_store *fs_store)
 }
 int print_each(const kv_item *item, const void *reply)
 {
-		/*
-	char *res_str = (char *)string;
-	u64 len = strlen(res_str);
-	if (len > MAX_REPLY) {
-		// unable to print more than buffer size
-		return 0;
+	//struct F_item *user = (struct F_item *)item->val;
+	printf("D2: %p;\n", item->val);
+	printf("D22: %d;\n", item->klen);
+	printf("D3: %p;\n", item);
+	if (30 < item->klen) {
+		return 1;
 	}
-	*/
-	struct F_item *user = (struct F_item *)item->val;
-	//user_to_string(res_str+len, user);
-	user_to_buf((xbuf_t *)reply, user);
+	user_to_buf((xbuf_t *)reply, (struct F_item *)item->val);
 	return 1;
 }
