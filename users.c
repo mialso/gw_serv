@@ -41,6 +41,7 @@ int main(int argc, char *argv[])
 	xbuf_t *reply = get_reply(argv);
 
 	u64 method = (u64) get_env(argv, REQUEST_METHOD);
+	printf("method = %lu\n", method);
 
 	struct F_item req_user = {0};
 	struct F_item *cur_user = NULL;
@@ -75,7 +76,7 @@ int main(int argc, char *argv[])
 			}
 	}
 
-	if (1 == method) 
+	if (1 == method || 5 == method) 
 	{
 		// serve GET request
 		get_arg("name=", &tmp_str, argc, argv);
@@ -94,6 +95,34 @@ int main(int argc, char *argv[])
 			return HTTP_200_OK;
 		}
 		strncpy(req_user.name, tmp_str, NAME_SIZE);
+		cur_user = (struct F_item *) kv_get(&users, req_user.name, strlen(req_user.name));
+		if (5 == method) {
+			// serve delete request
+			u64 fs_id = 0;
+			u64 res = 0;
+			if (!cur_user) {
+				xbuf_cat(reply, "d:[ERROR]: remove user: no such user");
+				return HTTP_200_OK;
+			}
+			if (!(res = kv_del(&users, cur_user->name, strlen(cur_user->name)))) {
+				xbuf_cat(reply, "e:[ERROR]: remove from kv failed");
+				return HTTP_200_OK;
+			}
+			fs_id = (((u64)cur_user - (u64)fs_store.data)/(sizeof(struct F_item)))+1;
+			printf("store.data addr=%p\n", fs_store.data);
+			printf("cur_user   addr=%p\n", cur_user);
+			printf("store.data addr=%lu\n", (u64)fs_store.data);
+			printf("cur_user   addr=%lu\n", (u64)cur_user);
+			printf("store.data - cur-user =%lu\n", ((u64)fs_store.data) - ((u64)cur_user));
+			printf("size of F_item=%zu\n", sizeof(struct F_item));
+			printf("delete: fs_id = %lu\n", fs_id);
+			if ((res = delete_item(&fs_store, fs_id))) {
+				xbuf_cat(reply, "g:[ERROR]: delete from f_store failed");
+				return HTTP_200_OK;
+			}
+			xbuf_cat(reply, "0");
+			return HTTP_200_OK;
+		}
 		tmp_str = NULL;
 		get_arg("key=", &tmp_str, argc, argv);
 		if (NULL == tmp_str || ('\0' == *(tmp_str))) {
@@ -103,7 +132,6 @@ int main(int argc, char *argv[])
 			xbuf_cat(reply, "4:[ERROR]: key is too long");
 			return HTTP_200_OK;
 		}
-		cur_user = (struct F_item *) kv_get(&users, req_user.name, strlen(req_user.name));
 		if (!cur_user) {
 			xbuf_cat(reply, "5:[ERROR]: no such user in store");
 			return HTTP_200_OK;
@@ -114,11 +142,10 @@ int main(int argc, char *argv[])
 		}
 		user_to_buf(reply, cur_user);
 		return HTTP_200_OK;
-
 	}
    	else
    	{
-		if (5 < method) {
+		if (2 == method || 4 < method) {
 			xbuf_xcat(reply, "f:[ERROR]: such type(method=%d) of HTTP request is not served", method);
 			return HTTP_200_OK;
 		}
@@ -126,7 +153,7 @@ int main(int argc, char *argv[])
 		u64 content_len = (u64) get_env(argv, CONTENT_LENGTH);
 		u64 res = 0;
 		u64 fs_id = 0;
-		if ((1 >= content_len) || (MAX_REQ_DATA < content_len)) {
+		if ((2 > content_len) || (MAX_REQ_DATA < content_len)) {
 			xbuf_xcat(reply, "7:[ERROR]: data size ={%d} is wrong, the range is [1..%d]", content_len, MAX_REQ_DATA);
 			return HTTP_200_OK;
 		}
@@ -146,7 +173,7 @@ int main(int argc, char *argv[])
 				//cur_user->id = req_user.id;
 				user_to_buf(reply, cur_user);
 				return HTTP_200_OK;
-			case 3:		// PUST
+			case 3:		// POST
 				if (cur_user) {
 					xbuf_xcat(reply, "a:[ERROR]: valid user provided in POST, use PUT to update");
 					return HTTP_200_OK;
@@ -168,18 +195,6 @@ int main(int argc, char *argv[])
 					return HTTP_200_OK;
 				}
 				user_to_buf(reply, cur_user);
-				return HTTP_200_OK;
-			case 5:
-				if (!cur_user) {
-					xbuf_cat(reply, "d:[ERROR]: remove user: no such user");
-					return HTTP_200_OK;
-				}
-				if (!(res = kv_del(&users, cur_user->name, strlen(cur_user->name)))) {
-					xbuf_cat(reply, "e:[ERROR]: remove from kv failed");
-				}
-				fs_id = (fs_store.data - cur_user)/(sizeof(struct F_item))+1;
-				delete_item(&fs_store, fs_id);
-				xbuf_cat(reply, "!");
 				return HTTP_200_OK;
 			default:
 				xbuf_xcat(reply, "f:[ERROR]: such type(method=%d) of HTTP request is not served", method);
@@ -213,6 +228,9 @@ int get_user_from_req(char *data, u64 data_len, struct F_item *user)
 	u64 key_counter = 0;
 	u64 role = 0;
 	u64 offset = 0;
+	if (!data) {
+		return 255;
+	}
 	char cur_char = *(data+counter);
 	if (',' == cur_char) return 1;
 	while ((',' != cur_char) && (counter < data_len)) {
