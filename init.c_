@@ -1,0 +1,100 @@
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <malloc.h>
+#include "gwan.h"  // G-WAN API
+#include "f_store.h"
+
+#pragma link "/home/mialso/projects/vs_pm/gwan_linux64-bit/libraries/libfstore.so"
+#define STORE_PATH "data/user.fstr"
+#define R_PATH_STORE "/home/mialso/projects/vs_pm/gwan_linux64-bit/127.0.0.1:3000/#127.0.0.1"
+
+struct User_store {
+	kv_t *user_kv;
+	struct F_store *user_store;
+};
+
+static int init_kv_store(struct F_store *fs_store, kv_t *kv_store);
+//struct F_store fs_store;
+//kv_t users;
+
+int main(int argc, char *argv[])
+{
+	char store_path[1024] = {0};
+	u64 res = 0;
+	s_snprintf(store_path, sizeof(store_path)-1, "%s/%s",
+		   	//(char *)get_env(argv, VHOST_ROOT),
+			R_PATH_STORE,
+			STORE_PATH
+	);
+	fprintf(stdout, "[INFO]: store initialization: %s\n", store_path);
+	struct F_store *user_store = (struct F_store *)calloc(1, sizeof(struct F_store));
+	if (!user_store) {
+		fprintf(stderr, "[ERROR]: init memory error\n");
+		return 1;
+	}
+	s_snprintf(user_store->name, 7, "user");
+	if ((res = init_store(store_path, user_store))) {
+		fprintf(stderr, "[ERROR]: users f_store initialization failed: err=[%lu], path =%s\n", res, store_path);
+		return 2;
+	}
+	fprintf(stdout, "[INFO]: user_store of <%lu> size initialized\n", user_store->size);
+	// init kv store
+	kv_t *user_kv = (kv_t *)calloc(1, sizeof(kv_t));
+	if (!user_kv) {
+		fprintf(stderr, "[ERROR]: user kv memory error\n");
+		return 3;
+	}
+	kv_init(user_kv, "users", user_store->size, 0, 0, 0);
+	if(init_kv_store(user_store, user_kv)) {
+		fprintf(stderr, "[ERROR]: init_kv_store(): unable to init\n");
+		return 4;
+	}
+	fprintf(stdout, "[INFO]: users kv_store initialized\n");
+	struct User_store **u_s = (struct User_store **) get_env(argv, US_SERVER_DATA);
+	if (NULL != u_s) {
+		u_s[0] = (struct User_store*) calloc(1, sizeof(struct User_store));
+		if (NULL == u_s[0]) {
+			fprintf(stderr, "[ERROR]: struct User_store memory error\n");
+			return 5;
+		}
+		u_s[0]->user_kv = user_kv;
+		u_s[0]->user_store = user_store;
+	} else {
+		fprintf(stderr, "[ERROR]: unable to get global US_SERVER_DATA pointer\n");
+		return 6;
+	}
+
+	/*
+	if (NULL == (struct F_item *) kv_get(&users, ADM, sizeof(ADM)-1)) {
+		if (add_admin(&users, &fs_store)) {
+			return HTTP_500_INTERNAL_SERVER_ERROR;
+		}
+	}
+	*/
+	return 0;
+}
+int init_kv_store(struct F_store *fs_store, kv_t *kv_store)
+{
+	struct F_item *fs_item;
+	u64 counter = 1;
+	while (counter <= fs_store->size) {
+		fs_item = get_item(fs_store, counter);
+		if (fs_item) {
+			kv_item kvitem = {0};
+
+			kvitem.key = fs_item->name;
+			kvitem.klen = strlen(fs_item->name);
+			kvitem.val = (char *) fs_item;
+			kvitem.in_use = 0;
+			kv_item *new_item = NULL;
+			if(NULL == (new_item = kv_add(kv_store, &kvitem))) {
+				fprintf(stderr, "[ERROR]: kv_add(): out_of_memory\n");
+				return 1;
+			}
+			printf("item {%s, %d: %p} added to kv[%ld at %p]\n", fs_item->name, kvitem.klen, fs_item, kv_store->nbr_items, new_item);
+		}
+		++counter;
+	}
+	return 0;
+}
